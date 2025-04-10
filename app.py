@@ -3,6 +3,13 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import os
 
+import json
+import requests
+from dotenv import load_dotenv
+import google.generativeai as genai
+load_dotenv()
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -68,6 +75,32 @@ def profile():
             'language': user.language
         }), 200
     return jsonify({'message': 'User not found'}), 404
+
+
+GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GENAI_API_KEY)
+
+# Load the Gemini Pro model
+
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        data = request.get_json()
+        user_prompt = data.get("prompt", "")
+
+        if not user_prompt:
+            return jsonify({"error": "Missing prompt"}), 400
+
+        response = model.generate_content(user_prompt)
+
+        return jsonify({"reply": response.text})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 

@@ -2,3 +2,6 @@ flask
 flask-cors 
 flask-sqlalchemy
 gunicorn
+dotenv
+requests
+google.generativeai
