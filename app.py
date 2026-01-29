@@ -6,7 +6,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
 load_dotenv()
 
 
@@ -78,28 +78,78 @@ def profile():
 
 
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GENAI_API_KEY)
+# genai.configure(api_key=GENAI_API_KEY)
+client = genai.Client(api_key=GENAI_API_KEY)
 
 # Load the Gemini Pro model
 
-
+model_list = []
+# iter the models
+# for model in client.models.list():
+#     # We filter for 'gemini' models to keep the list relevant
+#     print("name", model.name) # e.g. "models/gemini-1.5-flash"
+#     print("display_name", model.display_name)
+#     print("description", model.description)
+#     print("------")
 
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # model = genai.GenerativeModel("gemini-1.5-flash")
         data = request.get_json()
         user_prompt = data.get("prompt", "")
+        system_prompt = data.get("system_prompt", "You are a helpful assistant.")
 
         if not user_prompt:
             return jsonify({"error": "Missing prompt"}), 400
 
-        response = model.generate_content(user_prompt)
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[
+                {"role": "user", "parts": [{"text": system_prompt}]},
+                {"role": "user", "parts": [{"text": user_prompt}]}
+            ]
+        )
 
         return jsonify({"reply": response.text})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    data = request.json
+    chat_id = data["message"]["chat"]["id"]
+    user_msg = data["message"].get("text", "")
+    system_prompt = "You are an expert agricultural assistant."
+    if not user_msg:
+        answer = "please enter message."
+    else:
+        try:
+            response =client.models.generate_content(
+                    model="gemini-flash-latest",
+                    contents=[
+                        {"role": "user", "parts": [{"text": system_prompt}]},
+                        {"role": "user", "parts": [{"text": user_msg}]}
+                    ]
+                )
+
+            answer = response.text
+        except Exception as e:
+            answer = "Sorry, no response."
+
+    # Send back to Telegram
+    requests.post(
+        f"{TELEGRAM_URL}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": answer
+        }
+    )
+    return "OK"
 
 
 
