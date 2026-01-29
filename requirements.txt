@@ -4,4 +4,4 @@ flask-sqlalchemy
 gunicorn
 dotenv
 requests
-google.generativeai
+google-genai
