@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import os
+import re
 from threading import Thread
 
 import json
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 import base64
 import uuid
+from gtts import gTTS
 load_dotenv()
 
 
@@ -114,31 +116,64 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
     data = request.json
-    chat_id = data["message"]["chat"]["id"]
-    user_msg = data["message"].get("text", "")
-    message=data.get("message", {})
-    
-    if "photo" in message:
-        photos = message["photo"]
-        file_id = photos[-1]["file_id"]  
-        Thread(target=handle_crop_image, args=(chat_id, file_id)).start()
-        return "OK"
-    elif "text" in message:
-        Thread(target=agrichat, args=(chat_id, user_msg)).start()
-        return "OK"
+    if "message" in data:
+        message=data["message"]
+        chat_id = data["message"]["chat"]["id"]
 
-    else:
-        send_message(chat_id, "please send text or image.")
+        if "photo" in message:
+            photos = message["photo"]
+            file_id = photos[-1]["file_id"]  
+            Thread(target=handle_crop_image, args=(chat_id, file_id)).start()
+            return "OK"
+        elif "text" in message:
+            user_msg = data["message"].get("text", "")
+            Thread(target=agrichat, args=(chat_id, user_msg)).start()
+            return "OK"
+        elif "voice" in message:
+            file_id = message["voice"]["file_id"]
+            Thread(target=handle_audio, args=(chat_id, file_id)).start()
+
+        elif "audio" in message:
+            file_id = message["audio"]["file_id"]
+            Thread(target=handle_audio, args=(chat_id, file_id)).start()
+
+        else:
+            send_message(chat_id, "please send text or image or audio")
+            return "OK"
+    elif "edited_message" in data:
+        chat_id = data["edited_message"]["chat"]["id"]
+        send_message(chat_id, "please send new message.we are not process edited messages")
         return "OK"
 
 def agrichat(chat_id,user_msg,system_prompt=None):
-    if not system_prompt:
-        system_prompt = "You are an expert agricultural assistant.try to give short answers.until unless asked for more details."
     if not user_msg:
         answer = "please enter message."
+        send_message(chat_id, answer)
     else:
+        send_message(chat_id, "bot is typing...")
+        full_text=ask_llm(user_msg)
+        print("------------------")
+        print("full_text:",full_text)
+        print("------------------")
+        full_clean_text=clean_text_for_tts(full_text)
+        print("full_clean_text:",full_clean_text)
+        send_message(chat_id, full_clean_text)
+        summary_text=summarize_llm_text(full_text)
+        print("------------------")
+        print("summary_text:",summary_text)
+        clean_text=clean_text_for_tts(summary_text)
+        print("------------------")
+        print("clean_text:",clean_text)
+        audio=text_to_voice(clean_text[:600])
+        send_voice(chat_id,audio)
+        return "OK"
+
+    
+
+def ask_llm(user_msg,system_prompt=None):
+        if not system_prompt:
+            system_prompt = "You are an expert agricultural assistant.try to give short answers.until unless asked for more details."
         try:
-            send_message(chat_id, "bot is typing...")
             response =client.models.generate_content(
                     model="gemini-flash-latest",
                     contents=[
@@ -148,21 +183,71 @@ def agrichat(chat_id,user_msg,system_prompt=None):
                 )
 
             answer = response.text
-            print("Generated Answer:", answer)
+            return answer
         except Exception as e:
             answer = "Sorry, no response."
-    send_message(chat_id, answer)
+            return answer
 
+def summarize_llm_text(llm_text):
+    system_prompt="you are a good farmer friendly summarizer.generate speech friendly summary.Always summarize in spoken friendly language.summarize content perfectly without loosing important data."
+    prompt=f"please summarize this text in farmer-friendly         : {llm_text}"
+    answer=ask_llm(prompt,system_prompt)
+    return answer
 
+def text_to_voice(text):
+    filename=f"tts_{uuid.uuid4().hex}.mp3"
+    tts=gTTS(text=text,slow=False)
+    tts.save(filename)
+    return filename
 
+def send_voice(chat_id, audio_file):
+    with open(audio_file, "rb") as voice_file:
+        requests.post(
+            f"{TELEGRAM_URL}/sendVoice",
+            data={"chat_id": chat_id},
+            files={"voice": voice_file}
+        )
 
-# ---------------- TELEGRAM UTILS ---------------- #
 
 def send_message(chat_id, text):
     requests.post(
         f"{TELEGRAM_URL}/sendMessage",
         json={"chat_id": chat_id, "text": text}
     )
+
+import re
+
+def clean_text_for_tts(text):
+    # Normalize whitespace
+    text = text.replace("\r", " ").replace("\n", " ")
+
+    # Remove markdown bullets (*, -, •)
+    text = re.sub(r"[\*\-•]+", " ", text)
+
+    # Remove markdown emphasis (**bold**, __bold__)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+
+    # Remove inline code/backticks
+    text = re.sub(r"`(.*?)`", r"\1", text)
+
+    # Remove extra punctuation used only for formatting
+    text = re.sub(r"[:]{2,}", ".", text)
+
+    # Replace list-style colons with pauses
+    text = re.sub(r":", ". ", text)
+
+    # Normalize ranges (2-5 → 2 to 5)
+    text = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", text)
+
+    # Remove multiple spaces
+    text = re.sub(r"\s+", " ", text)
+
+    # Clean leftover symbols
+    text = re.sub(r"[^\w\s.,]", "", text)
+
+    return text.strip()
+
 
 def download_image(file_id):
     """
