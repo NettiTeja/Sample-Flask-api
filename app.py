@@ -131,11 +131,13 @@ def telegram_webhook():
             return "OK"
         elif "voice" in message:
             file_id = message["voice"]["file_id"]
-            Thread(target=handle_audio, args=(chat_id, file_id)).start()
+            Thread(target=process_audio, args=(chat_id, file_id, "ogg")).start()
+            return "OK"
 
         elif "audio" in message:
             file_id = message["audio"]["file_id"]
-            Thread(target=handle_audio, args=(chat_id, file_id)).start()
+            Thread(target=process_audio, args=(chat_id, file_id, "mp3")).start()
+            return "OK"
 
         else:
             send_message(chat_id, "please send text or image or audio")
@@ -152,21 +154,43 @@ def agrichat(chat_id,user_msg,system_prompt=None):
     else:
         send_message(chat_id, "bot is typing...")
         full_text=ask_llm(user_msg)
-        print("------------------")
-        print("full_text:",full_text)
-        print("------------------")
         full_clean_text=clean_text_for_tts(full_text)
-        print("full_clean_text:",full_clean_text)
         send_message(chat_id, full_clean_text)
-        summary_text=summarize_llm_text(full_text)
-        print("------------------")
-        print("summary_text:",summary_text)
-        clean_text=clean_text_for_tts(summary_text)
-        print("------------------")
-        print("clean_text:",clean_text)
-        audio=text_to_voice(clean_text[:600])
+        audio=text_to_voice(full_clean_text[:400])
         send_voice(chat_id,audio)
+        if audio and os.path.exists(audio):
+            os.remove(audio)
         return "OK"
+    
+def process_audio(chat_id, file_id, ext):
+    try:
+        # 1. Download audio
+        audio_file = download_file(file_id, ext)
+
+        # 2. STT
+        text = speech_to_text(audio_file)
+        if not text.strip():
+            send_message(chat_id, "⚠️ Could not understand audio.")
+            return
+
+        # 3. LLM
+        answer = ask_llm(text)
+        full_clean_text=clean_text_for_tts(answer)
+
+        # 4. TTS
+        tts_file = text_to_voice(full_clean_text)
+
+        # 5. Send audio reply
+        send_voice(chat_id, tts_file)
+    except Exception as e:
+        send_message(chat_id, f"⚠️ An error occurred while processing audio: {str(e)}")
+
+    finally:
+        # Cleanup
+        for f in [locals().get("audio_file"), locals().get("tts_file")]:
+            if f and os.path.exists(f):
+                os.remove(f)
+
 
     
 
@@ -185,7 +209,7 @@ def ask_llm(user_msg,system_prompt=None):
             answer = response.text
             return answer
         except Exception as e:
-            answer = "Sorry, no response."
+            answer = f"Sorry, no response.str({str(e)})"
             return answer
 
 def summarize_llm_text(llm_text):
@@ -199,6 +223,16 @@ def text_to_voice(text):
     tts=gTTS(text=text,slow=False)
     tts.save(filename)
     return filename
+
+def speech_to_text(audio_path):
+    """
+    Replace this with:
+    - Vosk
+    - Whisper API
+    - Any STT you choose
+    """
+    print(f"STT processing: {audio_path}")
+    return "Explain rice cultivation steps"
 
 def send_voice(chat_id, audio_file):
     with open(audio_file, "rb") as voice_file:
@@ -248,13 +282,29 @@ def clean_text_for_tts(text):
 
     return text.strip()
 
+def download_file(file_id, ext):
+    filename = f"audio_{uuid.uuid4().hex}.{ext}"
+
+    file_info = requests.get(
+        f"{TELEGRAM_URL}/getFile",
+        params={"file_id": file_id}
+    ).json()
+
+    path = file_info["result"]["file_path"]
+    url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
+
+    with open(filename, "wb") as f:
+        f.write(requests.get(url).content)
+
+    return filename
+
 
 def download_image(file_id):
     """
     Downloads image from Telegram and saves using UUID
     """
     filename = f"crop_{uuid.uuid4().hex}.jpg"
-    print("Downloading image with file_id:", file_id)
+    # print("Downloading image with file_id:", file_id)
 
     file_info = requests.get(
         f"{TELEGRAM_URL}/getFile",
@@ -279,7 +329,7 @@ def image_to_base64(image_path):
 
 def analyze_crop_image(image_path):
     image_base64 = image_to_base64(image_path)
-    print("Image converted to base64.",image_base64[:30])  # Print first 30 chars for verification
+    # print("Image converted to base64.",image_base64[:30])  # Print first 30 chars for verification
 
     system_prompt = """
     You are an agricultural expert.
@@ -312,8 +362,8 @@ def analyze_crop_image(image_path):
 
         return response.text
     except Exception as e:
-        print("Error during image analysis:", str(e))
-        return "Error analyzing image."
+        # print("Error during image analysis:", str(e))
+        return f"Error analyzing image: {str(e)}"
 # ---------------- IMAGE HANDLER ---------------- #
 
 def handle_crop_image(chat_id, file_id):
@@ -324,7 +374,7 @@ def handle_crop_image(chat_id, file_id):
         image_path = download_image(file_id)
 
         analysis = analyze_crop_image(image_path)
-        print("Analysis Result:", analysis)
+        # print("Analysis Result:", analysis)
 
         send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
 
