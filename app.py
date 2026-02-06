@@ -12,6 +12,7 @@ from google import genai
 import base64
 import uuid
 from gtts import gTTS
+from openai import OpenAI
 load_dotenv()
 
 
@@ -24,7 +25,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///./database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
-
+OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 # User Model
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -194,14 +196,39 @@ def process_audio(chat_id, file_id, ext):
                 os.remove(f)
 
 
-    
+def ask_llm_gpt(user_msg, system_prompt=None):
+    if not system_prompt:
+        system_prompt =( "You are a friendly agricultural assistant. Offer practical, easy-to-understand advice in bullet points,"
+        "focusing on farming techniques, crop care, and best practices.")
+
+    try:
+        # models=openai_client.models.list()
+        # for model in models:
+        #     print(model.id)
+        response = openai_client.responses.create(
+            model="gpt-5-nano",
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg}
+            ]
+        )
+        # print(response.output_text)
+        return response.output_text
+
+    except Exception as e:
+        # print(str(e))
+        return f"Sorry, no response. Error: {str(e)}"   
 
 def ask_llm(user_msg,system_prompt=None):
         if not system_prompt:
             system_prompt ="you are a helpful agricultural expert.assist farmer in friendly way.Give short, clear answers unless more details are requested. Always use simple language that a farmer can easily understand. If the question is about crop diseases, provide clear symptoms and simple treatment steps. If the question is about farming techniques, give practical advice that can be easily implemented. Avoid technical jargon and keep the tone friendly and supportive.try to understand the farmer's needs and provide the most relevant information. try to give answer in bullet points if question is about steps or process. Always be concise and to the point."
         try:
+            # models=client.models.list()
+            # for model in models:
+            #     print(model)
+                # print(model.name)
             response =client.models.generate_content(
-                    model="gemini-flash-latest",
+                    model="models/gemini-2.5-flash-lite",
                     contents=[
                         {"role": "user", "parts": [{"text": system_prompt}]},
                         {"role": "user", "parts": [{"text": user_msg}]}
@@ -211,7 +238,9 @@ def ask_llm(user_msg,system_prompt=None):
             answer = response.text
             return answer
         except Exception as e:
-            answer = f"Sorry, no response.{str(e)}"
+            # print(f"response from gpt due to gemini fail {str(e)}")
+            answer=ask_llm_gpt(user_msg)
+            # answer = f"Sorry, no response.{str(e)}"
             return answer
 
 def summarize_llm_text(llm_text):

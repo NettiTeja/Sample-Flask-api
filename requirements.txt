@@ -6,3 +6,4 @@ dotenv
 requests
 google-genai
 gtts
+openai
