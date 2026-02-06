@@ -154,13 +154,15 @@ def agrichat(chat_id,user_msg,system_prompt=None):
     else:
         send_message(chat_id, "bot is typing...")
         full_text=ask_llm(user_msg)
-        full_clean_text=clean_text_for_tts(full_text)
-        send_message(chat_id, full_clean_text)
-        audio=text_to_voice(full_clean_text[:400])
-        send_voice(chat_id,audio)
-        if audio and os.path.exists(audio):
-            os.remove(audio)
-        return "OK"
+        # full_text=ask_llm_gpt(user_msg)
+        # full_clean_text=clean_text_for_tts(full_text)
+        # send_message(chat_id, full_clean_text)
+        send_long_message(chat_id, full_text)
+        # audio=text_to_voice(full_clean_text[:400])
+        # send_voice(chat_id,audio)
+        # if audio and os.path.exists(audio):
+        #     os.remove(audio)
+        # return "OK"
     
 def process_audio(chat_id, file_id, ext):
     try:
@@ -196,7 +198,7 @@ def process_audio(chat_id, file_id, ext):
 
 def ask_llm(user_msg,system_prompt=None):
         if not system_prompt:
-            system_prompt = "You are an expert agricultural assistant.try to give short answers.until unless asked for more details."
+            system_prompt ="you are a helpful agricultural expert.assist farmer in friendly way.Give short, clear answers unless more details are requested. Always use simple language that a farmer can easily understand. If the question is about crop diseases, provide clear symptoms and simple treatment steps. If the question is about farming techniques, give practical advice that can be easily implemented. Avoid technical jargon and keep the tone friendly and supportive.try to understand the farmer's needs and provide the most relevant information. try to give answer in bullet points if question is about steps or process. Always be concise and to the point."
         try:
             response =client.models.generate_content(
                     model="gemini-flash-latest",
@@ -209,7 +211,7 @@ def ask_llm(user_msg,system_prompt=None):
             answer = response.text
             return answer
         except Exception as e:
-            answer = f"Sorry, no response.str({str(e)})"
+            answer = f"Sorry, no response.{str(e)}"
             return answer
 
 def summarize_llm_text(llm_text):
@@ -242,12 +244,18 @@ def send_voice(chat_id, audio_file):
             files={"voice": voice_file}
         )
 
+def send_long_message(chat_id, text, chunk_size=3500):
+    for i in range(0, len(text), chunk_size):
+        part = text[i:i + chunk_size]
+        send_message(chat_id, part)
+
 
 def send_message(chat_id, text):
-    requests.post(
+    res=requests.post(
         f"{TELEGRAM_URL}/sendMessage",
         json={"chat_id": chat_id, "text": text}
     )
+    # print("Message sent:", res.status_code, res.text)
 
 import re
 
