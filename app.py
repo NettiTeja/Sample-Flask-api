@@ -13,6 +13,16 @@ import base64
 import uuid
 from gtts import gTTS
 from openai import OpenAI
+import logging
+from services.chat_service import (
+    save_message,
+    get_language,
+    set_language,
+    build_llm_history,clear_chat_history
+)
+
+from models.user import User
+
 load_dotenv()
 
 
@@ -20,23 +30,20 @@ app = Flask(__name__)
 CORS(app)
 
 # SQLite DB config
-
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///./database.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///./telebotdatabase.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-db = SQLAlchemy(app)
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "connect_args": {"check_same_thread": False}
+}
+logging.basicConfig(level=logging.INFO)
+GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GENAI_API_KEY)
 OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-# User Model
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100))
-    location = db.Column(db.String(100))
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    language = db.Column(db.String(50))
-    password = db.Column(db.String(100), nullable=False)
 
-# Initialize DB
+from database import db
+db.init_app(app)
+
 with app.app_context():
     db.create_all()
 
@@ -84,8 +91,6 @@ def profile():
     return jsonify({'message': 'User not found'}), 404
 
 
-GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GENAI_API_KEY)
 
 
 @app.route('/chat', methods=['POST'])
@@ -100,7 +105,7 @@ def chat():
             return jsonify({"error": "Missing prompt"}), 400
 
         response = client.models.generate_content(
-            model="gemini-flash-latest",
+            model="models/gemini-2.5-flash-lite",
             contents=[
                 {"role": "user", "parts": [{"text": system_prompt}]},
                 {"role": "user", "parts": [{"text": user_prompt}]}
@@ -117,7 +122,13 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    data = request.json
+    # data = request.json
+    data = request.get_json()
+
+    # print("=== TELEGRAM JSON START ===")
+    # print(json.dumps(data,ensure_ascii=False))
+    # print("=== TELEGRAM JSON END ===")
+
     if "message" in data:
         message=data["message"]
         chat_id = data["message"]["chat"]["id"]
@@ -125,7 +136,8 @@ def telegram_webhook():
         if "photo" in message:
             photos = message["photo"]
             file_id = photos[-1]["file_id"]  
-            Thread(target=handle_crop_image, args=(chat_id, file_id)).start()
+            user_msg=message.get("caption", "Analyze image")
+            Thread(target=handle_crop_image, args=(user_msg,chat_id, file_id)).start()
             return "OK"
         elif "text" in message:
             user_msg = data["message"].get("text", "")
@@ -148,23 +160,89 @@ def telegram_webhook():
         chat_id = data["edited_message"]["chat"]["id"]
         send_message(chat_id, "please send new message.we are not process edited messages")
         return "OK"
+    
+    # elif "inline_query" in data:
+    #     inline = data["inline_query"]
+    #     print("Received inline query:", inline)
+    #     print("Inline query:", inline["query"])
+    #     return "OK"
+    else:
+        return "OK"
 
 def agrichat(chat_id,user_msg,system_prompt=None):
-    if not user_msg:
+    if not user_msg.strip():
         answer = "please enter message."
         send_message(chat_id, answer)
     else:
-        send_message(chat_id, "bot is typing...")
-        full_text=ask_llm(user_msg)
-        # full_text=ask_llm_gpt(user_msg)
-        # full_clean_text=clean_text_for_tts(full_text)
-        # send_message(chat_id, full_clean_text)
-        send_long_message(chat_id, full_text)
-        # audio=text_to_voice(full_clean_text[:400])
-        # send_voice(chat_id,audio)
-        # if audio and os.path.exists(audio):
-        #     os.remove(audio)
-        # return "OK"
+        with app.app_context():
+        # language command
+            cmd = user_msg.strip().lower()
+            if cmd == "/start":
+                send_message(
+                    chat_id,
+                    "👋 Welcome to AgroBot!\n\n"
+                    "I help farmers with crop diseases, cultivation tips, and farming advice.\n\n"
+                    "Commands:\n"
+                    "/help - Show help\n"
+                    "/clear_history - Clear chat memory\n"
+                    "/lang_hindi - Change language to hindi\n"
+                    "/lang_telugu - Change language to telugu\n"
+                    "/lang_tamil - Change language to tamil\n"
+                    "/lang_bengali - Change language to bengali\n\n"
+                    "Just send your farming question or crop image."
+                )
+                return
+            
+
+            if cmd == "/help":
+                send_message(
+                    chat_id,
+                    "🆘 Help Menu\n\n"
+                    "You can:\n"
+                    "• Ask farming questions\n"
+                    "• Send crop images\n\n"
+
+                    "Commands:\n"
+                    "/lang_english - Change language to English\n"
+                    "/lang_hindi - Change language to Hindi\n"
+                    "/lang_telugu - Change language to Telugu\n"
+                    "/lang_tamil - Change language to Tamil\n"
+                    "/lang_bengali - Change language to Bengali\n"
+                    "/clear_history - Clear chat memory"
+                )
+                return
+
+            # ---------------- /clear_history ----------------
+            if cmd == "/clear_history":
+                from services.chat_service import clear_chat_history
+                ok = clear_chat_history(chat_id)
+                if ok:
+                    send_message(chat_id, "🧹 Chat history cleared!")
+                else:
+                    send_message(chat_id, "⚠️ Failed to clear history.")
+                return
+
+
+            if user_msg.startswith("/lang"):
+                lang = user_msg.split("_")[-1]
+                set_language(chat_id, lang)
+                send_message(chat_id, f"Language set to {lang}")
+                return
+            lang = get_language(chat_id)
+            history = build_llm_history(chat_id, limit=3)
+            save_message(chat_id, "user", user_msg)
+            send_message(chat_id, "bot is typing...")
+            full_text=ask_llm(user_msg,language=lang,history=history)
+            # full_text=ask_llm_gpt(user_msg,language=lang,history=history)
+            # full_clean_text=clean_text_for_tts(full_text)
+            # send_message(chat_id, full_clean_text)
+            send_long_message(chat_id, full_text)
+            save_message(chat_id, "bot", full_text)
+            # audio=text_to_voice(full_clean_text[:400])
+            # send_voice(chat_id,audio)
+            # if audio and os.path.exists(audio):
+            #     os.remove(audio)
+            # return "OK"
     
 def process_audio(chat_id, file_id, ext):
     try:
@@ -179,6 +257,8 @@ def process_audio(chat_id, file_id, ext):
 
         # 3. LLM
         answer = ask_llm(text)
+        save_message(chat_id, "user", text)
+        save_message(chat_id, "bot", answer)
         full_clean_text=clean_text_for_tts(answer)
 
         # 4. TTS
@@ -196,50 +276,78 @@ def process_audio(chat_id, file_id, ext):
                 os.remove(f)
 
 
-def ask_llm_gpt(user_msg, system_prompt=None):
+def ask_llm_gpt(user_msg, system_prompt=None,language="English",history=[]):
     if not system_prompt:
-        system_prompt =( "You are a friendly agricultural assistant. Offer practical, easy-to-understand advice in bullet points,"
-        "focusing on farming techniques, crop care, and best practices.")
+        system_prompt =f"""You are a friendly agricultural assistant. Offer practical, easy-to-understand advice in bullet points,
+        focusing on farming techniques, crop care, and best practices.Answer in language:{language}"""
 
     try:
         # models=openai_client.models.list()
         # for model in models:
         #     print(model.id)
+        messages = [{"role":"system","content":system_prompt}]
+        messages.extend(history)
+        messages.append({"role":"user","content":user_msg})
         response = openai_client.responses.create(
             model="gpt-5-nano",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg}
-            ]
+            input=messages
         )
+            # input=[
+            #     {"role": "system", "content": system_prompt},
+            #     {"role": "user", "content": user_msg}
+            # ]
         # print(response.output_text)
         return response.output_text
 
     except Exception as e:
-        # print(str(e))
+        logging.error(f"no response gpt failed {str(e)}")
         return f"Sorry, no response. Error: {str(e)}"   
 
-def ask_llm(user_msg,system_prompt=None):
+def ask_llm(user_msg,system_prompt=None,language="English",history=[]):
         if not system_prompt:
-            system_prompt ="you are a helpful agricultural expert.assist farmer in friendly way.Give short, clear answers unless more details are requested. Always use simple language that a farmer can easily understand. If the question is about crop diseases, provide clear symptoms and simple treatment steps. If the question is about farming techniques, give practical advice that can be easily implemented. Avoid technical jargon and keep the tone friendly and supportive.try to understand the farmer's needs and provide the most relevant information. try to give answer in bullet points if question is about steps or process. Always be concise and to the point."
+            system_prompt =f"""you are a helpful agricultural expert.assist farmer in friendly way.Give short, 
+            clear answers unless more details are requested. Always use simple language that a farmer can easily 
+            understand. If the question is about crop diseases, provide clear symptoms and simple treatment steps. 
+            If the question is about farming techniques, give practical advice that can be easily implemented. 
+            Avoid technical jargon and keep the tone friendly and supportive.try to understand the farmer's needs and provide 
+            the most relevant information. try to give answer in bullet points if question is about steps or process. 
+            Always be concise and to the point. Answer in language:{language}"""
         try:
             # models=client.models.list()
             # for model in models:
             #     print(model)
                 # print(model.name)
+            contents = []
+
+            contents.append({
+                "role": "user",
+                "parts": [{"text": system_prompt}]
+            })
+
+            for msg in history:
+                contents.append({
+                    "role": "user" if msg["role"] == "user" else "model",
+                    "parts": [{"text": msg["content"]}]
+                })
+
+            contents.append({
+                "role": "user",
+                "parts": [{"text": user_msg}]
+            })
             response =client.models.generate_content(
                     model="models/gemini-2.5-flash-lite",
-                    contents=[
-                        {"role": "user", "parts": [{"text": system_prompt}]},
-                        {"role": "user", "parts": [{"text": user_msg}]}
-                    ]
+                    contents=contents
                 )
+                    # contents=[
+                    #     {"role": "user", "parts": [{"text": system_prompt}]},
+                    #     {"role": "user", "parts": [{"text": user_msg}]}
+                    # ]
 
             answer = response.text
             return answer
         except Exception as e:
-            # print(f"response from gpt due to gemini fail {str(e)}")
-            answer=ask_llm_gpt(user_msg)
+            logging.error(f"response from gpt due to gemini fail {str(e)}")
+            answer=ask_llm_gpt(user_msg,language=language,history=history)
             # answer = f"Sorry, no response.{str(e)}"
             return answer
 
@@ -262,7 +370,7 @@ def speech_to_text(audio_path):
     - Whisper API
     - Any STT you choose
     """
-    print(f"STT processing: {audio_path}")
+    # print(f"STT processing: {audio_path}")
     return "Explain rice cultivation steps"
 
 def send_voice(chat_id, audio_file):
@@ -286,7 +394,6 @@ def send_message(chat_id, text):
     )
     # print("Message sent:", res.status_code, res.text)
 
-import re
 
 def clean_text_for_tts(text):
     # Normalize whitespace
@@ -364,7 +471,7 @@ def image_to_base64(image_path):
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def analyze_crop_image(image_path):
+def analyze_crop_image(image_path,user_msg):
     image_base64 = image_to_base64(image_path)
     # print("Image converted to base64.",image_base64[:30])  # Print first 30 chars for verification
 
@@ -386,6 +493,7 @@ def analyze_crop_image(image_path):
                     "role": "user",
                     "parts": [
                         {"text": system_prompt},
+                        {"text": user_msg},
                         {
                             "inline_data": {
                                 "mime_type": "image/jpeg",
@@ -399,23 +507,25 @@ def analyze_crop_image(image_path):
 
         return response.text
     except Exception as e:
-        # print("Error during image analysis:", str(e))
+        logging.error(f"Error during image analysis: {str(e)}")
         return f"Error analyzing image: {str(e)}"
 # ---------------- IMAGE HANDLER ---------------- #
 
-def handle_crop_image(chat_id, file_id):
+def handle_crop_image(user_msg,chat_id, file_id):
     image_path = None
     try:
         send_message(chat_id, "📸 Image received. Analyzing crop disease, please wait...")
 
         image_path = download_image(file_id)
 
-        analysis = analyze_crop_image(image_path)
+        analysis = analyze_crop_image(image_path,user_msg)
         # print("Analysis Result:", analysis)
-
         send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
+        save_message(chat_id, "user", user_msg)
+        save_message(chat_id, "bot", analysis)
 
     except Exception as e:
+        logging.error(f"Error handling crop image: {str(e)}")
         send_message(
             chat_id,
             "⚠️ Unable to analyze the image.\nPlease send a clear close-up photo of the affected leaf."
