@@ -246,27 +246,29 @@ def agrichat(chat_id,user_msg,system_prompt=None):
     
 def process_audio(chat_id, file_id, ext):
     try:
-        # 1. Download audio
-        audio_file = download_file(file_id, ext)
+        with app.app_context():
+            # 1. Download audio
+            audio_file = download_file(file_id, ext)
 
-        # 2. STT
-        text = speech_to_text(audio_file)
-        if not text.strip():
-            send_message(chat_id, "⚠️ Could not understand audio.")
-            return
+            # 2. STT
+            text = speech_to_text(audio_file)
+            if not text.strip():
+                send_message(chat_id, "⚠️ Could not understand audio.")
+                return
 
-        # 3. LLM
-        answer = ask_llm(text)
-        save_message(chat_id, "user", text)
-        save_message(chat_id, "bot", answer)
-        full_clean_text=clean_text_for_tts(answer)
+            # 3. LLM
+            answer = ask_llm(text)
+            save_message(chat_id, "user", text)
+            save_message(chat_id, "bot", answer)
+            full_clean_text=clean_text_for_tts(answer)
 
-        # 4. TTS
-        tts_file = text_to_voice(full_clean_text)
+            # 4. TTS
+            tts_file = text_to_voice(full_clean_text)
 
-        # 5. Send audio reply
-        send_voice(chat_id, tts_file)
+            # 5. Send audio reply
+            send_voice(chat_id, tts_file)
     except Exception as e:
+        logging.error(f"Error processing audio: {str(e)}")
         send_message(chat_id, f"⚠️ An error occurred while processing audio: {str(e)}")
 
     finally:
@@ -371,7 +373,7 @@ def speech_to_text(audio_path):
     - Any STT you choose
     """
     # print(f"STT processing: {audio_path}")
-    return "Explain rice cultivation steps"
+    return "Explain rice cultivation steps give short answer in bullet points"
 
 def send_voice(chat_id, audio_file):
     with open(audio_file, "rb") as voice_file:
@@ -514,15 +516,16 @@ def analyze_crop_image(image_path,user_msg):
 def handle_crop_image(user_msg,chat_id, file_id):
     image_path = None
     try:
-        send_message(chat_id, "📸 Image received. Analyzing crop disease, please wait...")
+        with app.app_context():
+            send_message(chat_id, "📸 Image received. Analyzing crop disease, please wait...")
 
-        image_path = download_image(file_id)
+            image_path = download_image(file_id)
 
-        analysis = analyze_crop_image(image_path,user_msg)
-        # print("Analysis Result:", analysis)
-        send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
-        save_message(chat_id, "user", user_msg)
-        save_message(chat_id, "bot", analysis)
+            analysis = analyze_crop_image(image_path,user_msg)
+            # print("Analysis Result:", analysis)
+            send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
+            save_message(chat_id, "user", user_msg)
+            save_message(chat_id, "bot", analysis)
 
     except Exception as e:
         logging.error(f"Error handling crop image: {str(e)}")
