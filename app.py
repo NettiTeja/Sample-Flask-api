@@ -20,6 +20,7 @@ from services.chat_service import (
     set_language,
     build_llm_history,clear_chat_history
 )
+from services.language_service import detect_language, map_to_gtts_lang
 
 from models.user import User
 
@@ -146,6 +147,7 @@ def telegram_webhook():
         elif "voice" in message:
             file_id = message["voice"]["file_id"]
             Thread(target=process_audio, args=(chat_id, file_id, "ogg")).start()
+            logging.info(f"voice_file_id:{file_id}")
             return "OK"
 
         elif "audio" in message:
@@ -197,7 +199,7 @@ def agrichat(chat_id,user_msg,system_prompt=None):
             if cmd == "/help":
                 send_message(
                     chat_id,
-                    "🆘 Help Menu\n\n"
+                    "Help Menu\n\n"
                     "You can:\n"
                     "• Ask farming questions\n"
                     "• Send crop images\n\n"
@@ -257,14 +259,13 @@ def process_audio(chat_id, file_id, ext):
                 return
 
             # 3. LLM
-            answer = ask_llm(text)
-            save_message(chat_id, "user", text)
+            answer = text
+            save_message(chat_id, "user", "user sent some voice file")
             save_message(chat_id, "bot", answer)
-            full_clean_text=clean_text_for_tts(answer)
-
+            # full_clean_text=clean_text_for_tts(answer)
+            answer=clean_llm_text(answer)
             # 4. TTS
-            tts_file = text_to_voice(full_clean_text)
-
+            tts_file = text_to_voice(answer)
             # 5. Send audio reply
             send_voice(chat_id, tts_file)
     except Exception as e:
@@ -360,20 +361,57 @@ def summarize_llm_text(llm_text):
     return answer
 
 def text_to_voice(text):
+    lang = detect_language(text)
+    gtts_lang = map_to_gtts_lang(lang)
     filename=f"tts_{uuid.uuid4().hex}.mp3"
-    tts=gTTS(text=text,slow=False)
+    tts=gTTS(text=text,lang=gtts_lang,slow=False)
     tts.save(filename)
     return filename
 
+
+
 def speech_to_text(audio_path):
+    system_prompt = """
+    You are a friendly agricultural assistant.
+    Analyze the audio and answer the question present in that audio.
+    Identify the user's language and respond in the same language.
+    Use simple words.
+    Use speakable words which are ready to convert into audio.
+    Give short bullet-point answers.
+    Do not mention that you analyzed audio.
+    Do not add headings.
+    Only give the answer to the question mentioned in audio.
     """
-    Replace this with:
-    - Vosk
-    - Whisper API
-    - Any STT you choose
-    """
-    # print(f"STT processing: {audio_path}")
-    return "Explain rice cultivation steps give short answer in bullet points"
+    try:
+        with open(audio_path, "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode()
+
+        response = client.models.generate_content(
+            model="models/gemini-2.5-flash-lite",
+            contents=[
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": system_prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "audio/ogg",
+                                "data": audio_b64
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+
+        return response.text.strip()
+
+    except Exception as e:
+        # print("Gemini STT failed:", e)
+        logging.error(f"Error during Gemini STT failed: {str(e)}")
+        return ""
+
+
 
 def send_voice(chat_id, audio_file):
     with open(audio_file, "rb") as voice_file:
@@ -396,35 +434,31 @@ def send_message(chat_id, text):
     )
     # print("Message sent:", res.status_code, res.text)
 
+def clean_llm_text(text):
+    return re.sub(r'^[\s\*\-\•]+\s*', '', text, flags=re.MULTILINE).strip()
 
 def clean_text_for_tts(text):
-    # Normalize whitespace
+
     text = text.replace("\r", " ").replace("\n", " ")
 
-    # Remove markdown bullets (*, -, •)
-    text = re.sub(r"[\*\-•]+", " ", text)
+    # Remove bullets only at line start
+    text = re.sub(r"^\s*[\*\-•]\s*", "", text, flags=re.MULTILINE)
 
-    # Remove markdown emphasis (**bold**, __bold__)
+    # Remove markdown bold
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"__(.*?)__", r"\1", text)
 
-    # Remove inline code/backticks
+    # Remove backticks
     text = re.sub(r"`(.*?)`", r"\1", text)
 
-    # Remove extra punctuation used only for formatting
-    text = re.sub(r"[:]{2,}", ".", text)
-
-    # Replace list-style colons with pauses
+    # Replace colon with pause
     text = re.sub(r":", ". ", text)
 
-    # Normalize ranges (2-5 → 2 to 5)
+    # Normalize ranges
     text = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", text)
 
-    # Remove multiple spaces
+    # Remove extra spaces
     text = re.sub(r"\s+", " ", text)
-
-    # Clean leftover symbols
-    text = re.sub(r"[^\w\s.,]", "", text)
 
     return text.strip()
 
@@ -473,11 +507,11 @@ def image_to_base64(image_path):
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def analyze_crop_image(image_path,user_msg):
+def analyze_crop_image(image_path,user_msg,language="english"):
     image_base64 = image_to_base64(image_path)
     # print("Image converted to base64.",image_base64[:30])  # Print first 30 chars for verification
 
-    system_prompt = """
+    system_prompt = f"""
     You are an agricultural expert.
     Analyze the crop image and reply STRICTLY in this format:
 
@@ -486,6 +520,7 @@ def analyze_crop_image(image_path,user_msg):
     Confidence (0-100):
     Symptoms:
     Treatment (simple farmer-friendly steps):
+    Answer in language:{language}
     """
     try:
         response = client.models.generate_content(
@@ -520,8 +555,9 @@ def handle_crop_image(user_msg,chat_id, file_id):
             send_message(chat_id, "📸 Image received. Analyzing crop disease, please wait...")
 
             image_path = download_image(file_id)
+            lang = get_language(chat_id)
 
-            analysis = analyze_crop_image(image_path,user_msg)
+            analysis = analyze_crop_image(image_path,user_msg,language=lang)
             # print("Analysis Result:", analysis)
             send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
             save_message(chat_id, "user", user_msg)
