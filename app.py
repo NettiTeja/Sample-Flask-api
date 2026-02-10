@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 import base64
 import uuid
-# from gtts import gTTS
+from gtts import gTTS
 from openai import OpenAI
 import logging
 from services.chat_service import (
@@ -41,8 +41,6 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GENAI_API_KEY)
 OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-os.system("espeak-ng --version")
-os.system("ffmpeg -version")
 
 from database import db
 db.init_app(app)
@@ -262,15 +260,20 @@ def process_audio(chat_id, file_id, ext):
 
             # 3. LLM
             answer = text
-            print("llmanser",text)
             save_message(chat_id, "user", "user sent some voice file")
             save_message(chat_id, "bot", answer)
             # full_clean_text=clean_text_for_tts(answer)
             answer=clean_llm_text(answer)
             # 4. TTS
+            logging.info(f"tts started")
             tts_file = text_to_voice(answer)
-            # 5. Send audio reply
-            send_voice(chat_id, tts_file)
+            if tts_file:
+                logging.info(f"tts success")
+                # 5. Send audio reply
+                send_voice(chat_id, tts_file)
+            else:
+                logging.info(f"tts fail so send text as backup instead of audio")
+                send_long_message(chat_id, answer)
     except Exception as e:
         logging.error(f"Error processing audio: {str(e)}")
         send_message(chat_id, f"⚠️ An error occurred while processing audio: {str(e)}")
@@ -363,40 +366,24 @@ def summarize_llm_text(llm_text):
     answer=ask_llm(prompt,system_prompt)
     return answer
 
+gtts_lock = Lock()
 def text_to_voice(text):
     print("text",text)
     lang = detect_language(text)
     print("lang",lang)
     gtts_lang = map_to_gtts_lang(lang)
     print("gtts lang",gtts_lang)
+    filename=f"tts_{uuid.uuid4().hex}.mp3"
     try:
-        return gtts_tts(text, lang=gtts_lang)
+        with gtts_lock:
+            tts=gTTS(text=text,lang=gtts_lang,slow=False)
+            tts.save(filename)
+        return filename
     except Exception as e:
-        logging.error(f"gTTS failed, using eSpeak: {str(e)}")
-
-    # Fallback to eSpeak
-    return espeak_tts(text, lang=gtts_lang)
-
-gtts_lock = Lock()
-def gtts_tts(text, lang="en"):
-    filename = f"gtts_{uuid.uuid4().hex}.mp3"
-    with gtts_lock:
-        gTTS(text=text, lang=lang, slow=False).save(filename)
-    return filename
+        logging.info(f"tts fail to convert audio")
+        return None
 
 
-def espeak_tts(text, lang="en"):
-    wav = f"es_{uuid.uuid4().hex}.wav"
-    safe = text.replace('"','').replace("\n"," ")
-    os.system(f'espeak-ng -v {lang} "{safe}" -w {wav}')
-
-    mp3 = wav.replace(".wav",".mp3")
-    os.system(f"ffmpeg -y -i {wav} {mp3}")
-
-    if os.path.exists(wav):
-        os.remove(wav)
-
-    return mp3
 
 
 
