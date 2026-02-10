@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 import base64
 import uuid
-# from gtts import gTTS
+from gtts import gTTS
 from openai import OpenAI
 import logging
 from services.chat_service import (
@@ -22,7 +22,6 @@ from services.chat_service import (
 )
 from services.language_service import detect_language, map_to_gtts_lang
 
-from models.user import User
 
 load_dotenv()
 
@@ -41,8 +40,6 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GENAI_API_KEY)
 OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-os.system("espeak-ng --version")
-os.system("ffmpeg -version")
 
 from database import db
 db.init_app(app)
@@ -50,75 +47,6 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
-# Routes
-@app.route('/signup', methods=['POST'])
-def signup():
-    data = request.json
-    existing_user = User.query.filter_by(email=data['email']).first()
-    if existing_user:
-        return jsonify({'message': 'User already exists'}), 409
-
-    new_user = User(
-        name=data['name'],
-        location=data['location'],
-        email=data['email'],
-        language=data['language'],
-        password=data['password']
-    )
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({'message': 'Signup successful'}), 201
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    user = User.query.filter_by(email=data['email']).first()
-
-    if user and user.password == data['password']:
-        return jsonify({'message': 'Login successful', 'name': user.name,'email':user.email}), 200
-    return jsonify({'message': 'Invalid credentials'}), 401
-
-
-@app.route('/profile', methods=['POST'])
-def profile():
-    data = request.json
-    user = User.query.filter_by(email=data.get('email')).first()
-
-    if user:
-        return jsonify({
-            'name': user.name,
-            'email': user.email,
-            'location': user.location,
-            'language': user.language
-        }), 200
-    return jsonify({'message': 'User not found'}), 404
-
-
-
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    try:
-        # model = genai.GenerativeModel("gemini-1.5-flash")
-        data = request.get_json()
-        user_prompt = data.get("prompt", "")
-        system_prompt = data.get("system_prompt", "You are a helpful assistant.")
-
-        if not user_prompt:
-            return jsonify({"error": "Missing prompt"}), 400
-
-        response = client.models.generate_content(
-            model="models/gemini-2.5-flash-lite",
-            contents=[
-                {"role": "user", "parts": [{"text": system_prompt}]},
-                {"role": "user", "parts": [{"text": user_prompt}]}
-            ]
-        )
-
-        return jsonify({"reply": response.text})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
     
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -255,22 +183,29 @@ def process_audio(chat_id, file_id, ext):
             audio_file = download_file(file_id, ext)
 
             # 2. STT
-            text = speech_to_text(audio_file)
+            lang = get_language(chat_id)
+            text = speech_to_text(audio_file,lang)
             if not text.strip():
-                send_message(chat_id, "⚠️ Could not understand audio.")
+                logging.info(f"audio to text fail")
+                send_message(chat_id, "⚠️ Could not process/understand audio.")
                 return
 
             # 3. LLM
             answer = text
-            print("llmanser",text)
             save_message(chat_id, "user", "user sent some voice file")
             save_message(chat_id, "bot", answer)
             # full_clean_text=clean_text_for_tts(answer)
             answer=clean_llm_text(answer)
             # 4. TTS
+            logging.info(f"tts started")
             tts_file = text_to_voice(answer)
             # 5. Send audio reply
-            send_voice(chat_id, tts_file)
+            if tts_file:
+                logging.info(f"tts success")
+                send_voice(chat_id, tts_file)
+            else:
+                logging.info(f"failed to convert text to audio ,sending text")
+                send_long_message(chat_id, answer)
     except Exception as e:
         logging.error(f"Error processing audio: {str(e)}")
         send_message(chat_id, f"⚠️ An error occurred while processing audio: {str(e)}")
@@ -364,18 +299,14 @@ def summarize_llm_text(llm_text):
     return answer
 
 def text_to_voice(text):
-    print("text",text)
     lang = detect_language(text)
-    print("lang",lang)
+    logging.info(f"lang detected {lang}")
     gtts_lang = map_to_gtts_lang(lang)
-    print("gtts lang",gtts_lang)
     try:
         return gtts_tts(text, lang=gtts_lang)
     except Exception as e:
         logging.error(f"gTTS failed, using eSpeak: {str(e)}")
-
-    # Fallback to eSpeak
-    return espeak_tts(text, lang=gtts_lang)
+        return espeak_tts(text, lang=gtts_lang)
 
 gtts_lock = Lock()
 def gtts_tts(text, lang="en"):
@@ -387,21 +318,25 @@ def gtts_tts(text, lang="en"):
 
 def espeak_tts(text, lang="en"):
     wav = f"es_{uuid.uuid4().hex}.wav"
-    safe = text.replace('"','').replace("\n"," ")
-    os.system(f'espeak-ng -v {lang} "{safe}" -w {wav}')
+    try:
+        safe = text.replace('"','').replace("\n"," ")
+        os.system(f'espeak-ng -v {lang} "{safe}" -w {wav}')
 
-    mp3 = wav.replace(".wav",".mp3")
-    os.system(f"ffmpeg -y -i {wav} {mp3}")
+        mp3 = wav.replace(".wav",".mp3")
+        os.system(f"ffmpeg -y -i {wav} {mp3}")
 
-    if os.path.exists(wav):
-        os.remove(wav)
+        if os.path.exists(wav):
+            os.remove(wav)
+        if os.path.exists(mp3):
+            return mp3
+    except Exception as e:
+        logging.error(f"espeak_tts also failed: {str(e)}")
+        return None
 
-    return mp3
 
 
-
-def speech_to_text(audio_path):
-    system_prompt = """
+def speech_to_text(audio_path,lang="english"):
+    system_prompt = f"""
     You are a friendly agricultural assistant.Give a feasible answer to the question mentioned in audio.
     Analyze the audio and answer the question present in that audio.
     Identify the user's language and respond in the SAME language
@@ -413,7 +348,7 @@ def speech_to_text(audio_path):
     treat the text in audio as question and answer that question.
     Do not add headings.
     give the answer to the question mentioned in audio.
-    user languge:te
+    user languge:{lang}
     """
     try:
         with open(audio_path, "rb") as f:
@@ -545,15 +480,14 @@ def analyze_crop_image(image_path,user_msg,language="english"):
     # print("Image converted to base64.",image_base64[:30])  # Print first 30 chars for verification
 
     system_prompt = f"""
-    You are an agricultural expert.
-    Analyze the crop image and reply STRICTLY in this format:
+    You are an agricultural expert.Analysis or should be in language:{language} .
+    Analyze the crop image and reply STRICTLY in this format in respective language:
 
     Crop:
     Disease:
     Confidence (0-100):
     Symptoms:
     Treatment (simple farmer-friendly steps):
-    Answer in language:{language}
     """
     try:
         response = client.models.generate_content(
