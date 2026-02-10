@@ -3,7 +3,11 @@ services:
     name: flask-api
     env: python
     plan: free
-    buildCommand: ""
+    buildCommand: |
+      apt-get update
+      apt-get install -y espeak ffmpeg
+      pip install -r requirements.txt
+
     startCommand: gunicorn app:app
     envVars:
       - key: FLASK_ENV

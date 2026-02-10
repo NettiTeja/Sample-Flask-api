@@ -3,7 +3,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import os
 import re
-from threading import Thread
+from threading import Thread,Lock
 
 import json
 import requests
@@ -41,6 +41,8 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GENAI_API_KEY)
 OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
+os.system("espeak --version")
+os.system("ffmpeg -version")
 
 from database import db
 db.init_app(app)
@@ -260,6 +262,7 @@ def process_audio(chat_id, file_id, ext):
 
             # 3. LLM
             answer = text
+            print("llmanser",text)
             save_message(chat_id, "user", "user sent some voice file")
             save_message(chat_id, "bot", answer)
             # full_clean_text=clean_text_for_tts(answer)
@@ -361,26 +364,56 @@ def summarize_llm_text(llm_text):
     return answer
 
 def text_to_voice(text):
+    print("text",text)
     lang = detect_language(text)
+    print("lang",lang)
     gtts_lang = map_to_gtts_lang(lang)
-    filename=f"tts_{uuid.uuid4().hex}.mp3"
-    tts=gTTS(text=text,lang=gtts_lang,slow=False)
-    tts.save(filename)
+    print("gtts lang",gtts_lang)
+    try:
+        return gtts_tts(text, gtts_lang)
+    except Exception as e:
+        logging.error(f"gTTS failed, using eSpeak: {str(e)}")
+
+    # Fallback to eSpeak
+    return espeak_tts(text, gtts_lang)
+
+gtts_lock = Lock()
+def gtts_tts(text, lang="en"):
+    filename = f"gtts_{uuid.uuid4().hex}.mp3"
+    with gtts_lock:
+        gTTS(text=text, lang=lang, slow=False).save(filename)
     return filename
+
+
+def espeak_tts(text, lang="en"):
+    wav = f"es_{uuid.uuid4().hex}.wav"
+    safe = text.replace('"','').replace("\n"," ")
+    os.system(f'espeak -v {lang} "{safe}" -w {wav}')
+
+    mp3 = wav.replace(".wav",".mp3")
+    os.system(f"ffmpeg -y -i {wav} {mp3}")
+
+    if os.path.exists(wav):
+        os.remove(wav)
+
+    return mp3
 
 
 
 def speech_to_text(audio_path):
     system_prompt = """
-    You are a friendly agricultural assistant.
+    You are a friendly agricultural assistant.Give a feasible answer to the question mentioned in audio.
     Analyze the audio and answer the question present in that audio.
-    Identify the user's language and respond in the same language.
-    Use simple words.
-    Use speakable words which are ready to convert into audio.
+    Identify the user's language and respond in the SAME language
+    AND in its NATIVE SCRIPT,Do NOT use romanized text.
+    user can ask in below languages ,you should reply in same user language.
+    Always use native writing system.
+    Use simple and speakable words.
     Give short bullet-point answers.
-    Do not mention that you analyzed audio.
+    treat the text in audio as question and answer that question.
     Do not add headings.
-    Only give the answer to the question mentioned in audio.
+    give the answer to the question mentioned in audio.
+    user languge:te
     """
     try:
         with open(audio_path, "rb") as f:
