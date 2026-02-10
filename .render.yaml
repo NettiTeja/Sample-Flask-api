@@ -1,14 +1,7 @@
 services:
   - type: web
     name: flask-api
-    env: python
+    env: docker
     plan: free
-    buildCommand: |
-      apt-get update
-      apt-get install -y espeak-ng ffmpeg
-      pip install -r requirements.txt
-
     startCommand: gunicorn app:app
-    envVars:
-      - key: FLASK_ENV
-        value: production
+
