@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 import base64
 import uuid
-from gtts import gTTS
+# from gtts import gTTS
 from openai import OpenAI
 import logging
 from services.chat_service import (
@@ -41,7 +41,7 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GENAI_API_KEY)
 OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-os.system("espeak --version")
+os.system("espeak-ng --version")
 os.system("ffmpeg -version")
 
 from database import db
@@ -370,12 +370,12 @@ def text_to_voice(text):
     gtts_lang = map_to_gtts_lang(lang)
     print("gtts lang",gtts_lang)
     try:
-        return gtts_tts(text, gtts_lang)
+        return gtts_tts(text, lang=gtts_lang)
     except Exception as e:
         logging.error(f"gTTS failed, using eSpeak: {str(e)}")
 
     # Fallback to eSpeak
-    return espeak_tts(text, gtts_lang)
+    return espeak_tts(text, lang=gtts_lang)
 
 gtts_lock = Lock()
 def gtts_tts(text, lang="en"):
@@ -388,7 +388,7 @@ def gtts_tts(text, lang="en"):
 def espeak_tts(text, lang="en"):
     wav = f"es_{uuid.uuid4().hex}.wav"
     safe = text.replace('"','').replace("\n"," ")
-    os.system(f'espeak -v {lang} "{safe}" -w {wav}')
+    os.system(f'espeak-ng -v {lang} "{safe}" -w {wav}')
 
     mp3 = wav.replace(".wav",".mp3")
     os.system(f"ffmpeg -y -i {wav} {mp3}")
