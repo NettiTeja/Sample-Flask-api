@@ -1,7 +1,6 @@
 services:
   - type: web
-    name: flask-api
+    name: telebot
     env: docker
     plan: free
     startCommand: gunicorn app:app
-
