@@ -21,6 +21,8 @@ from services.chat_service import (
     build_llm_history,clear_chat_history
 )
 from services.language_service import detect_language, map_to_gtts_lang
+from services.bot_messages import get_bot_message
+
 
 
 load_dotenv()
@@ -109,39 +111,14 @@ def agrichat(chat_id,user_msg,system_prompt=None):
         with app.app_context():
         # language command
             cmd = user_msg.strip().lower()
+            lang = get_language(chat_id)
             if cmd == "/start":
-                send_message(
-                    chat_id,
-                    "👋 Welcome to AgroBot!\n\n"
-                    "I help farmers with crop diseases, cultivation tips, and farming advice.\n\n"
-                    "Commands:\n"
-                    "/help - Show help\n"
-                    "/clear_history - Clear chat memory\n"
-                    "/lang_hindi - Change language to hindi\n"
-                    "/lang_telugu - Change language to telugu\n"
-                    "/lang_tamil - Change language to tamil\n"
-                    "/lang_bengali - Change language to bengali\n\n"
-                    "Just send your farming question or crop image."
-                )
+                send_message(chat_id, get_bot_message(get_language(chat_id), "start"))
                 return
             
 
             if cmd == "/help":
-                send_message(
-                    chat_id,
-                    "Help Menu\n\n"
-                    "You can:\n"
-                    "• Ask farming questions\n"
-                    "• Send crop images\n\n"
-
-                    "Commands:\n"
-                    "/lang_english - Change language to English\n"
-                    "/lang_hindi - Change language to Hindi\n"
-                    "/lang_telugu - Change language to Telugu\n"
-                    "/lang_tamil - Change language to Tamil\n"
-                    "/lang_bengali - Change language to Bengali\n"
-                    "/clear_history - Clear chat memory"
-                )
+                send_message(chat_id, get_bot_message(get_language(chat_id), "help"))
                 return
 
             # ---------------- /clear_history ----------------
@@ -149,21 +126,23 @@ def agrichat(chat_id,user_msg,system_prompt=None):
                 from services.chat_service import clear_chat_history
                 ok = clear_chat_history(chat_id)
                 if ok:
-                    send_message(chat_id, "🧹 Chat history cleared!")
+                    send_message(chat_id, get_bot_message(get_language(chat_id), "history_cleared"))
                 else:
-                    send_message(chat_id, "⚠️ Failed to clear history.")
+                    send_message(chat_id, get_bot_message(get_language(chat_id), "history_failed"))
                 return
 
 
             if user_msg.startswith("/lang"):
                 lang = user_msg.split("_")[-1]
+                lang=lang.strip().lower()
                 set_language(chat_id, lang)
-                send_message(chat_id, f"Language set to {lang}")
+                send_message(chat_id, get_bot_message(lang, "language_set", language=lang))
                 return
             lang = get_language(chat_id)
             history = build_llm_history(chat_id, limit=3)
             save_message(chat_id, "user", user_msg)
-            send_message(chat_id, "bot is typing...")
+            lang = get_language(chat_id)
+            send_message(chat_id, get_bot_message(lang, "typing"))
             full_text=ask_llm(user_msg,language=lang,history=history)
             # full_text=ask_llm_gpt(user_msg,language=lang,history=history)
             # full_clean_text=clean_text_for_tts(full_text)
@@ -416,17 +395,8 @@ def clean_text_for_tts(text):
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"__(.*?)__", r"\1", text)
 
-    # Remove backticks
-    text = re.sub(r"`(.*?)`", r"\1", text)
-
     # Replace colon with pause
     text = re.sub(r":", ". ", text)
-
-    # Normalize ranges
-    text = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", text)
-
-    # Remove extra spaces
-    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
@@ -519,11 +489,10 @@ def handle_crop_image(user_msg,chat_id, file_id):
     image_path = None
     try:
         with app.app_context():
-            send_message(chat_id, "📸 Image received. Analyzing crop disease, please wait...")
+            lang = get_language(chat_id)
+            send_message(chat_id, get_bot_message(lang, "image_analyzing"))
 
             image_path = download_image(file_id)
-            lang = get_language(chat_id)
-
             analysis = analyze_crop_image(image_path,user_msg,language=lang)
             # print("Analysis Result:", analysis)
             send_message(chat_id, f"🌾 Crop Disease Analysis\n\n{analysis}")
@@ -532,10 +501,7 @@ def handle_crop_image(user_msg,chat_id, file_id):
 
     except Exception as e:
         logging.error(f"Error handling crop image: {str(e)}")
-        send_message(
-            chat_id,
-            "⚠️ Unable to analyze the image.\nPlease send a clear close-up photo of the affected leaf."
-        )
+        send_message(chat_id, get_bot_message(lang, "image_failed"))
 
     finally:
         # Cleanup temp file
