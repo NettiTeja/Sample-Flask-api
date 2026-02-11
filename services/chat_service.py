@@ -31,7 +31,7 @@ def get_language(chat_id):
     chat = get_or_create_chat(chat_id)
     if chat:
         return chat.language
-    return "English"   # default
+    return "english"   # default
 
 def save_message(chat_id, role, content):
     try:

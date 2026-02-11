@@ -65,6 +65,7 @@ def telegram_webhook():
     if "message" in data:
         message=data["message"]
         chat_id = data["message"]["chat"]["id"]
+        first_name = message.get("from", {}).get("first_name", "Farmer")
 
         if "photo" in message:
             photos = message["photo"]
@@ -73,8 +74,8 @@ def telegram_webhook():
             Thread(target=handle_crop_image, args=(user_msg,chat_id, file_id)).start()
             return "OK"
         elif "text" in message:
-            user_msg = data["message"].get("text", "")
-            Thread(target=agrichat, args=(chat_id, user_msg)).start()
+            user_msg = data["message"].get("text", "/start")
+            Thread(target=agrichat, args=(chat_id, user_msg,first_name)).start()
             return "OK"
         elif "voice" in message:
             file_id = message["voice"]["file_id"]
@@ -103,7 +104,7 @@ def telegram_webhook():
     else:
         return "OK"
 
-def agrichat(chat_id,user_msg,system_prompt=None):
+def agrichat(chat_id,user_msg,first_name,system_prompt=None):
     if not user_msg.strip():
         answer = "please enter message."
         send_message(chat_id, answer)
@@ -113,12 +114,15 @@ def agrichat(chat_id,user_msg,system_prompt=None):
             cmd = user_msg.strip().lower()
             lang = get_language(chat_id)
             if cmd == "/start":
-                send_message(chat_id, get_bot_message(get_language(chat_id), "start"))
+                send_message(chat_id, get_bot_message(lang, "start", name=first_name))
+                return
+            if cmd in ["hii","hello","hi","help"," "]:
+                send_message(chat_id, get_bot_message(lang, "start", name=first_name))
                 return
             
 
             if cmd == "/help":
-                send_message(chat_id, get_bot_message(get_language(chat_id), "help"))
+                send_message(chat_id, get_bot_message(lang, "help", name=first_name))
                 return
 
             # ---------------- /clear_history ----------------
@@ -136,6 +140,7 @@ def agrichat(chat_id,user_msg,system_prompt=None):
                 lang = user_msg.split("_")[-1]
                 lang=lang.strip().lower()
                 set_language(chat_id, lang)
+                lang = get_language(chat_id)
                 send_message(chat_id, get_bot_message(lang, "language_set", language=lang))
                 return
             lang = get_language(chat_id)
